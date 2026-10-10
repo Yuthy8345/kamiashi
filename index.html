@@ -86,6 +86,7 @@ button:focus-visible{outline:2px solid var(--bleu-hi);outline-offset:3px}
 .chip .k{color:var(--muted);font-weight:500}
 .chip.combo{background:var(--rouge);color:#fff;border-color:transparent}
 .chip.combo .k{color:rgba(255,255,255,.82)}
+.chip.combo.bump{animation:bump .45s ease-out}
 .chip svg{width:14px;height:14px}
 .speedo{position:absolute;left:50%;bottom:calc(16% + var(--safe-bottom));transform:translateX(-50%);display:flex;align-items:baseline;gap:6px;padding:6px 14px 6px 12px;
   background:rgba(8,17,25,.72);border-radius:10px;border-left:4px solid var(--rouge);pointer-events:none;white-space:nowrap}
@@ -164,7 +165,7 @@ button:focus-visible{outline:2px solid var(--bleu-hi);outline-offset:3px}
 .center-card{margin:auto 0;align-self:stretch}
 /* Japanese copy breaks between phrases, never mid-word; overflow-wrap rescues very narrow screens */
 .sheet,#shout .sub,#hint span{word-break:keep-all;overflow-wrap:anywhere;line-break:strict}
-@media (prefers-reduced-motion:reduce){#shout.show{animation-duration:1.4s}.board .val.bump{animation:none}}
+@media (prefers-reduced-motion:reduce){#shout.show{animation-duration:1.4s}.board .val.bump,.chip.combo.bump{animation:none}}
 </style>
 
 <div id="app">
@@ -1311,8 +1312,13 @@ function hudAll(){
   hud.dist.textContent=s.dist.toFixed(1);
   const w=s.wind.w;
   hud.wind.innerHTML=Math.abs(w)<0.2?'なし':`${w<0?'←':'→'} <b>${Math.abs(w).toFixed(1)}</b>m/s`;
-  const next=Math.min(G.streak+1,5);
+}
+// The combo chip shows the multiplier riding on the shot in front of you, so it only changes
+// when the next shot comes up — never while the last one's result is still on screen.
+function hudCombo(){
+  const next=Math.min(G.streak+1,5), was=hud.combo.hidden?1:parseInt(hud.comboV.textContent.slice(1))||1;
   hud.combo.hidden=next<2; hud.comboV.textContent='×'+next;
+  if(next>was){ hud.combo.classList.remove('bump'); void hud.combo.offsetWidth; hud.combo.classList.add('bump'); }
 }
 function hudClock(){
   if(G.mode!=='time') return;
@@ -1342,7 +1348,7 @@ function setupShot(){
   world=newWorld(shot);
   cam.adv=0; setCam(); netWave=null;
   G.phase='aim'; G.aimT=0;
-  if(!G.demo) hudAll();
+  if(!G.demo){ hudAll(); hudCombo(); }
   $('hint').hidden=G.demo||G.shots>0;
 }
 function nextShot(){ G.phase='trans'; G.transT=0; G._swapped=false; }
@@ -1432,7 +1438,7 @@ function startGame(mode){
   $('menu').hidden=true; $('over').hidden=true; $('pause').hidden=true;
   $('hud').hidden=false; $('chips').hidden=false; hud.speed.hidden=true;
   shoutEl.classList.remove('show');
-  nextShot(); hudAll();
+  hud.combo.hidden=true; nextShot(); hudAll();
 }
 function toMenu(){
   Object.assign(G,{demo:true,paused:false,mode:null});
@@ -1616,7 +1622,7 @@ function start(data){
   if(data && data.mode && !data.demo){
     Object.assign(G,{mode:data.mode,score:data.score|0,lives:data.lives??3,time:data.time??60,goals:data.goals|0,streak:data.streak|0,maxStreak:data.maxStreak|0,longest:data.longest||0,shots:data.shots|0,lastMode:data.mode});
     G.demo=false; $('menu').hidden=true; $('hud').hidden=false; $('chips').hidden=false;
-    setupShot(); hudAll();
+    setupShot(); hudAll(); hudCombo();
   }
   requestAnimationFrame(frame);
 }
