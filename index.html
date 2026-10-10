@@ -806,7 +806,7 @@ const Snd=(()=>{
   // Rendered once, off the live clock, as soon as sound starts: dozens of voices pushed through vowel
   // formants (お→あ for a cheer, a falling あ for a sigh, a held おぉ while the ball is in the air),
   // plus claps, a few whistles and a stadium-sized echo. Afterwards they play back as plain clips.
-  const bank={cheer:[],groan:[],ooh:[]};
+  const bank={cheer:[],groan:[]};
   let crowdBusy=false, oohNow=null;
   const VOWEL={a:[800,1230,2500],o:[480,820,2450],u:[350,1100,2300]};
   function rngOf(seed){ let s=(seed>>>0)||1; return()=>{ s=(Math.imul(s,1664525)+1013904223)>>>0; return s/4294967296; }; }
@@ -863,6 +863,9 @@ const Snd=(()=>{
         o.connect(g); out(g,(r()*2-1)*0.7); o.start(t); o.stop(t+0.65);
       }
     }
+    return finish(ctx);
+  }
+  function finish(ctx){
     return new Promise(res=>{
       ctx.oncomplete=e=>res(e.renderedBuffer);
       try{ const p=ctx.startRendering(); if(p&&p.then) p.then(res,()=>res(null)); }catch(e){ res(null); }
@@ -876,11 +879,84 @@ const Snd=(()=>{
       return buf;
     });
   }
+  // The goal cheer is built differently from the sigh: a big roar of breath, short shouts that start
+  // and stop at random with no shared pitch or vibrato (held, gliding tones read as eerie), and applause.
+  function renderCheer(seed){
+    const OAC=window.OfflineAudioContext||window.webkitOfflineAudioContext; if(!OAC) return Promise.resolve(null);
+    const sr=ac.sampleRate, dur=3.6, ctx=new OAC(2,Math.ceil(dur*sr),sr), r=rngOf(seed);
+    // pink noise: the body of a crowd's roar
+    const pink=ctx.createBuffer(1,sr*2,sr); { const d=pink.getChannelData(0); let b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0;
+      for(let i=0;i<d.length;i++){ const w=r()*2-1; b0=0.99886*b0+w*0.0555179; b1=0.99332*b1+w*0.0750759; b2=0.969*b2+w*0.153852;
+        b3=0.8665*b3+w*0.3104856; b4=0.55*b4+w*0.5329522; b5=-0.7616*b5-w*0.016898; d[i]=(b0+b1+b2+b3+b4+b5+b6+w*0.5362)*0.11; b6=w*0.115926; } }
+    const ir=ctx.createBuffer(2,Math.floor(sr*2.2),sr);
+    for(let c=0;c<2;c++){ const d=ir.getChannelData(c); for(let i=0;i<d.length;i++){ const t=i/sr; d[i]=t<0.015?0:(r()*2-1)*Math.exp(-t*2.6); } }
+    const bus=ctx.createGain(), lp=ctx.createBiquadFilter(), verb=ctx.createConvolver(), wet=ctx.createGain(), dry=ctx.createGain();
+    lp.type='lowpass'; lp.frequency.value=5200; verb.buffer=ir; wet.gain.value=0.3; dry.gain.value=1;
+    bus.connect(lp); lp.connect(dry); lp.connect(verb); verb.connect(wet); dry.connect(ctx.destination); wet.connect(ctx.destination);
+    const out=(node,p)=>{ if(ctx.createStereoPanner){ const pn=ctx.createStereoPanner(); pn.pan.value=p; node.connect(pn); pn.connect(bus); } else node.connect(bus); };
+    // one swell for the whole stand: up fast, a long happy tail
+    const swell=(g,peak)=>{ g.gain.setValueAtTime(0,0); g.gain.linearRampToValueAtTime(peak,0.28); g.gain.setValueAtTime(peak,1.0);
+      g.gain.linearRampToValueAtTime(peak*0.45,2.4); g.gain.linearRampToValueAtTime(0,3.5); };
+    // 1) the roar: pink noise coloured like an open "ア", two decorrelated sides, gently heaving
+    for(const side of [-0.6,0.6]){
+      const sN=ctx.createBufferSource(); sN.buffer=pink; sN.loop=true;
+      const heave=ctx.createGain(); heave.gain.setValueAtTime(1,0);
+      for(let t=0.15;t<3.5;t+=0.12+r()*0.1) heave.gain.linearRampToValueAtTime(0.75+r()*0.5,t);
+      const env=ctx.createGain(); swell(env,0.9); sN.connect(heave);
+      for(const [f,q,gv] of [[620,1.1,1],[1250,1.3,0.7],[2600,1.5,0.3]]){
+        const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=f*(0.95+r()*0.1); bp.Q.value=q;
+        const g=ctx.createGain(); g.gain.value=gv; heave.connect(bp); bp.connect(g); g.connect(env);
+      }
+      out(env,side); sN.start(0,r()*1.5); sN.stop(dur);
+    }
+    // 2) shouts: short, breathy, each at its own pitch and moment
+    const soft=(()=>{ const n=24, re=new Float32Array(n), im=new Float32Array(n); for(let k=1;k<n;k++) im[k]=1/Math.pow(k,1.7); return ctx.createPeriodicWave(re,im); })();
+    const VOW2=[[780,1220,2500],[560,900,2450],[520,1750,2550],[700,1100,2450]];
+    for(let i=0;i<72;i++){
+      const female=r()<0.38, fs=female?1.15:1, f0=female?210+r()*110:118+r()*80;
+      const t0=0.04+Math.pow(r(),1.5)*1.9, len=0.3+r()*0.75, t1=t0+len;
+      const osc=ctx.createOscillator(); osc.setPeriodicWave(soft);
+      osc.frequency.setValueAtTime(f0*(0.9+r()*0.06),t0);
+      osc.frequency.linearRampToValueAtTime(f0*(1.04+r()*0.08),t0+len*0.22);
+      for(let t=t0+len*0.3;t<t1;t+=0.06+r()*0.05) osc.frequency.linearRampToValueAtTime(f0*(0.95+r()*0.08)*(1-0.18*(t-t0)/len),t);
+      const nz=ctx.createBufferSource(); nz.buffer=pink; nz.loop=true;
+      const tone=ctx.createGain(); tone.gain.value=0.5+r()*0.2; const air=ctx.createGain(); air.gain.value=2.2;
+      const src=ctx.createGain(); osc.connect(tone); tone.connect(src); nz.connect(air); air.connect(src);
+      const env=ctx.createGain(); env.gain.value=0;
+      const V=VOW2[Math.floor(r()*VOW2.length)];
+      for(let k=0;k<3;k++){
+        const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.Q.value=[4,5,6][k]; bp.frequency.value=V[k]*fs*(0.93+r()*0.14);
+        const g=ctx.createGain(); g.gain.value=[1,0.5,0.2][k]; src.connect(bp); bp.connect(g); g.connect(env);
+      }
+      const pk=0.18+r()*0.22, a=0.03+r()*0.05;
+      env.gain.setValueAtTime(0,t0); env.gain.linearRampToValueAtTime(pk,t0+a);
+      env.gain.linearRampToValueAtTime(pk*0.6,t0+len*0.65); env.gain.linearRampToValueAtTime(0,t1);
+      out(env,(r()*2-1)*0.9);
+      osc.start(t0); nz.start(t0,r()*1.5); osc.stop(t1+0.02); nz.stop(t1+0.02);
+    }
+    // 3) applause: a thousand short claps, thickest just after the ball hits the net
+    const clap=ctx.createBuffer(1,Math.floor(sr*0.025),sr); { const d=clap.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(r()*2-1)*Math.exp(-i/(sr*0.0028)); }
+    for(let i=0;i<1100;i++){
+      const t=0.12+Math.pow(r(),1.8)*3.2, fall=t<0.5?t/0.5:Math.max(0.12,1-(t-0.5)/3);
+      const sN=ctx.createBufferSource(); sN.buffer=clap; sN.playbackRate.value=0.7+r()*0.7;
+      const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=700+r()*2100; bp.Q.value=0.9;
+      const g=ctx.createGain(); g.gain.value=(0.18+r()*0.3)*fall;
+      sN.connect(bp); bp.connect(g); out(g,(r()*2-1)*0.95); sN.start(t);
+    }
+    // 4) two fans whistling through their fingers
+    for(let i=0;i<2;i++){
+      const t=0.35+r()*1.2, o=ctx.createOscillator(), g=ctx.createGain(), f=2500+r()*700;
+      o.frequency.setValueAtTime(f*0.8,t); o.frequency.linearRampToValueAtTime(f,t+0.1); o.frequency.setValueAtTime(f,t+0.3); o.frequency.linearRampToValueAtTime(f*1.15,t+0.45);
+      g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.035,t+0.04); g.gain.setValueAtTime(0.035,t+0.42); g.gain.linearRampToValueAtTime(0,t+0.52);
+      o.connect(g); out(g,(r()*2-1)*0.7); o.start(t); o.stop(t+0.55);
+    }
+    return finish(ctx);
+  }
   async function prepareCrowd(){
     if(crowdBusy||!ac) return; crowdBusy=true;
     try{
-      for(const [kind,seed] of [['groan',11],['cheer',23],['ooh',37],['cheer',41],['groan',53],['ooh',67]]){
-        const b=await renderCrowd(kind,seed); if(b) bank[kind].push(b);
+      for(const [kind,seed] of [['groan',11],['cheer',23],['cheer',41],['groan',53]]){
+        const b=await (kind==='cheer'?renderCheer(seed):renderCrowd(kind,seed)); if(b) bank[kind].push(b);
         await new Promise(r=>setTimeout(r,30));
       }
     }catch(e){}
@@ -893,14 +969,14 @@ const Snd=(()=>{
     return { fade(sec){ try{ const t=ac.currentTime; g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(gain,t); g.gain.linearRampToValueAtTime(0,t+sec); sN.stop(t+sec+0.05); }catch(e){} } };
   }
   function hush(){ if(oohNow){ oohNow.fade(0.25); oohNow=null; } }
+  const CHEER_GAIN=0.95;
   return {
     init, whistle, _bank:bank,
     get on(){return on}, toggle(){ on=!on; store.set('banana-shoot-sound',on); if(on) init(); if(amb) amb.gain.value=on?0.05:0; return on; },
-    ooh(){ hush(); oohNow=crowd('ooh',0.3); if(!oohNow) noise(1.1,'bandpass',650,0.7,0.22,0.35); },
     kick(p){ tone(150,55,0.15,0.9*p+0.2); noise(0.05,'lowpass',2000,0.7,0.5); },
     post(){ tone(1320,1290,0.6,0.22,'triangle'); tone(2010,1990,0.4,0.1); noise(0.03,'highpass',3000,0.7,0.2); },
     net(){ noise(0.32,'bandpass',800,0.9,0.4,0.01); },
-    cheer(){ hush(); const v=crowd('cheer',0.95); noise(2.4,'bandpass',1000,0.5,v?0.2:0.42,0.25); if(!v) noise(2.2,'bandpass',2300,0.8,0.16,0.3,0.05); },
+    cheer(){ hush(); const v=crowd('cheer',CHEER_GAIN); if(!v){ noise(2.4,'bandpass',1000,0.5,0.42,0.25); noise(2.2,'bandpass',2300,0.8,0.16,0.3,0.05); } },
     groan(level=1){ hush(); const v=crowd('groan',0.75*level); noise(1.3,'lowpass',520,0.8,v?0.14:0.32,0.18); },
     thud(){ tone(95,48,0.14,0.7); noise(0.07,'lowpass',800,0.7,0.4); },
   };
@@ -1450,7 +1526,7 @@ function doKick(k){
   G.phase='flight';
   if(!G.demo){
     G.shots++; $('hint').hidden=true;
-    Snd.kick(clamp(k.V/33,0,1)); Snd.ooh();
+    Snd.kick(clamp(k.V/33,0,1));
     try{ navigator.vibrate&&navigator.vibrate(18); }catch(e){}
     hud.speedV.textContent=Math.round(k.V*3.6); hud.speed.hidden=false; speedTimer=2.2;
   }
