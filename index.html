@@ -900,11 +900,63 @@ const Snd=(()=>{
       return buf;
     });
   }
+  // ---- the goal cheer (chosen from the listening samples as "E′, applause fading out") ----
+  // Bright breathy voices rising お→あ, settled by 1.4 s; applause outlasts them and thins out to
+  // nothing by about 2 s, so the stand is quiet before the next shot comes up at 1.9 s.
+  const CV={a:[800,1230,2500],o:[480,820,2450],e:[530,1800,2600],i:[320,2200,2950],u:[350,1100,2300]};
+  const C_CONTOUR=[[0,1.12],[0.15,1.48],[0.6,1.58],[1,1.42]];
+  function renderCheer(seed){
+    const OAC=window.OfflineAudioContext||window.webkitOfflineAudioContext; if(!OAC) return Promise.resolve(null);
+    const sr=ac.sampleRate, ctx=new OAC(2,Math.ceil(2.4*sr),sr), r=rngOf(seed);
+    const noise=ctx.createBuffer(1,sr,sr); { const d=noise.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=r()*2-1; }
+    const ir=ctx.createBuffer(2,Math.floor(sr*1.6),sr);
+    for(let c=0;c<2;c++){ const d=ir.getChannelData(c); for(let i=0;i<d.length;i++){ const t=i/sr; d[i]=t<0.012?0:(r()*2-1)*Math.exp(-t*3.3); } }
+    const bus=ctx.createGain(), hp=ctx.createBiquadFilter(), lp=ctx.createBiquadFilter(), verb=ctx.createConvolver(), wet=ctx.createGain(), dry=ctx.createGain();
+    hp.type='highpass'; hp.frequency.value=110; lp.type='lowpass'; lp.frequency.value=5600; verb.buffer=ir; wet.gain.value=0.2;
+    bus.connect(hp); hp.connect(lp); lp.connect(dry); lp.connect(verb); verb.connect(wet); dry.connect(ctx.destination); wet.connect(ctx.destination);
+    const out=(node,p)=>{ if(ctx.createStereoPanner){ const pn=ctx.createStereoPanner(); pn.pan.value=p; node.connect(pn); pn.connect(bus); } else node.connect(bus); };
+    // voices
+    const spread=0.42, level=0.55;
+    for(let i=0;i<48;i++){
+      const female=r()<0.4, fs=female?1.16:1, base=female?195+r()*65:105+r()*45;
+      const t0=Math.pow(r(),1.4)*spread;
+      const contour=C_CONTOUR.map(([f,m])=>[f,m+(r()-0.5)*0.16]);
+      const len=0.9+r()*0.45, amp=level*(0.55+0.45*r())*(1-0.3*t0/spread), vib=0.012+r()*0.02, pan=(r()*2-1)*0.85, t1=t0+len;
+      const osc=ctx.createOscillator(); osc.type='sawtooth';
+      contour.forEach(([f,m],k)=>{ const t=t0+len*f; k?osc.frequency.linearRampToValueAtTime(base*m,t):osc.frequency.setValueAtTime(base*m,t); });
+      const lfo=ctx.createOscillator(), lg=ctx.createGain(); lfo.frequency.value=4.5+r()*2.5; lg.gain.value=base*vib; lfo.connect(lg); lg.connect(osc.frequency);
+      const nz=ctx.createBufferSource(); nz.buffer=noise; nz.loop=true; const ng=ctx.createGain(); ng.gain.value=0.42;
+      const src=ctx.createGain(); osc.connect(src); nz.connect(ng); ng.connect(src);
+      const env=ctx.createGain(); env.gain.value=0;
+      for(let k=0;k<3;k++){
+        const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.Q.value=[6,8,10][k];
+        bp.frequency.setValueAtTime(CV.o[k]*fs*(0.95+r()*0.1),t0);
+        bp.frequency.linearRampToValueAtTime(CV.a[k]*fs*(0.95+r()*0.1),t0+len*0.25);
+        const g=ctx.createGain(); g.gain.value=[1,0.75,0.45][k]; src.connect(bp); bp.connect(g); g.connect(env);
+      }
+      const a=0.05+r()*0.07;
+      env.gain.setValueAtTime(0,t0); env.gain.linearRampToValueAtTime(amp,t0+a);
+      env.gain.linearRampToValueAtTime(amp*(0.75+r()*0.25),t0+len*0.65); env.gain.linearRampToValueAtTime(0,t1);
+      out(env,pan);
+      osc.start(t0); lfo.start(t0); nz.start(t0,r()*0.8); osc.stop(t1+0.02); lfo.stop(t1+0.02); nz.stop(t1+0.02);
+    }
+    // applause: in from 0.12 s, full by 0.45 s, then fewer and softer claps from 1.15 s
+    const clap=ctx.createBuffer(1,Math.floor(sr*0.04),sr); { const d=clap.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(r()*2-1)*Math.exp(-i/(sr*0.006)); }
+    const dens=t=>t<0.45?(t-0.12)/0.33:t<1.15?1:Math.exp(-(t-1.15)/0.4), soft=t=>t<1.15?1:Math.exp(-(t-1.15)/0.48);
+    for(let i=0;i<520;i++){
+      let t=0.12+r()*2.08; for(let k=0;k<40&&r()>dens(t);k++) t=0.12+r()*2.08;
+      const sN=ctx.createBufferSource(); sN.buffer=clap; sN.playbackRate.value=0.8+r()*0.4;
+      const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=600+r()*1600; bp.Q.value=0.8;
+      const g=ctx.createGain(); g.gain.value=(0.05+r()*0.07)*soft(t);
+      sN.connect(bp); bp.connect(g); out(g,(r()*2-1)*0.9); sN.start(t);
+    }
+    return finish(ctx);
+  }
   async function prepareCrowd(){
     if(crowdBusy||!ac) return; crowdBusy=true;
     try{
-      for(const [kind,seed] of [['groan',11],['cheer',23],['cheer',41],['groan',53]]){
-        const b=await renderCrowd(kind,seed); if(b) bank[kind].push(b);
+      for(const [kind,seed] of [['groan',11],['cheer',505],['cheer',606],['groan',53]]){
+        const b=await (kind==='cheer'?renderCheer(seed):renderCrowd(kind,seed)); if(b) bank[kind].push(b);
         await new Promise(r=>setTimeout(r,30));
       }
     }catch(e){}
