@@ -781,12 +781,13 @@ const Snd=(()=>{
     }catch(e){ ac=null; }
   }
   function env(g,t0,a,dur,peak){ g.gain.setValueAtTime(0.0001,t0); g.gain.exponentialRampToValueAtTime(peak,t0+a); g.gain.exponentialRampToValueAtTime(0.0001,t0+dur); }
-  function noise(dur,type,freq,q,peak,a=0.005,delay=0){
+  function noise(dur,type,freq,q,peak,a=0.005,delay=0,isCrowd=false){
     if(!ac||!on) return; const t0=ac.currentTime+delay;
     const src=ac.createBufferSource(); src.buffer=nbuf; src.loop=true;
     const f=ac.createBiquadFilter(); f.type=type; f.frequency.value=freq; f.Q.value=q;
     const g=ac.createGain(); env(g,t0,a,dur,peak);
     src.connect(f); f.connect(g); g.connect(master); src.start(t0); src.stop(t0+dur+0.05);
+    if(isCrowd) track(g,src,delay+dur);
   }
   function tone(f0,f1,dur,peak,type='sine',delay=0){
     if(!ac||!on) return; const t0=ac.currentTime+delay;
@@ -807,7 +808,21 @@ const Snd=(()=>{
   // formants (お→あ for a cheer, a falling あ for a sigh, a held おぉ while the ball is in the air),
   // plus claps, a few whistles and a stadium-sized echo. Afterwards they play back as plain clips.
   const bank={cheer:[],groan:[]};
-  let crowdBusy=false, oohNow=null;
+  let crowdBusy=false;
+  // every crowd sound still ringing, so the next shot can start in quiet
+  const live=new Set();
+  function track(g,src,sec){ const h={g,src}; live.add(h); setTimeout(()=>live.delete(h),sec*1000+300); return h; }
+  function quiet(sec){
+    if(!ac) return; const t=ac.currentTime;
+    for(const h of live){
+      try{
+        const p=h.g.gain;
+        if(p.cancelAndHoldAtTime) p.cancelAndHoldAtTime(t); else { const v=p.value; p.cancelScheduledValues(t); p.setValueAtTime(v,t); }
+        p.linearRampToValueAtTime(0,t+sec); h.src.stop(t+sec+0.05);
+      }catch(e){}
+    }
+    live.clear();
+  }
   const VOWEL={a:[800,1230,2500],o:[480,820,2450],u:[350,1100,2300]};
   function rngOf(seed){ let s=(seed>>>0)||1; return()=>{ s=(Math.imul(s,1664525)+1013904223)>>>0; return s/4294967296; }; }
   function renderCrowd(kind,seed){
@@ -966,18 +981,17 @@ const Snd=(()=>{
     const list=bank[kind], buf=list[Math.floor(Math.random()*list.length)];
     const sN=ac.createBufferSource(); sN.buffer=buf; sN.playbackRate.value=0.96+Math.random()*0.08;
     const g=ac.createGain(); g.gain.value=gain; sN.connect(g); g.connect(master); sN.start();
-    return { fade(sec){ try{ const t=ac.currentTime; g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(gain,t); g.gain.linearRampToValueAtTime(0,t+sec); sN.stop(t+sec+0.05); }catch(e){} } };
+    return track(g,sN,buf.duration/sN.playbackRate.value);
   }
-  function hush(){ if(oohNow){ oohNow.fade(0.25); oohNow=null; } }
   const CHEER_GAIN=0.95;
   return {
-    init, whistle, _bank:bank,
+    init, whistle, quiet, _bank:bank, get _live(){ return live.size; },
     get on(){return on}, toggle(){ on=!on; store.set('banana-shoot-sound',on); if(on) init(); if(amb) amb.gain.value=on?0.05:0; return on; },
     kick(p){ tone(150,55,0.15,0.9*p+0.2); noise(0.05,'lowpass',2000,0.7,0.5); },
     post(){ tone(1320,1290,0.6,0.22,'triangle'); tone(2010,1990,0.4,0.1); noise(0.03,'highpass',3000,0.7,0.2); },
     net(){ noise(0.32,'bandpass',800,0.9,0.4,0.01); },
-    cheer(){ hush(); const v=crowd('cheer',CHEER_GAIN); if(!v){ noise(2.4,'bandpass',1000,0.5,0.42,0.25); noise(2.2,'bandpass',2300,0.8,0.16,0.3,0.05); } },
-    groan(level=1){ hush(); const v=crowd('groan',0.75*level); noise(1.3,'lowpass',520,0.8,v?0.14:0.32,0.18); },
+    cheer(){ const v=crowd('cheer',CHEER_GAIN); if(!v){ noise(2.4,'bandpass',1000,0.5,0.42,0.25,0,true); noise(2.2,'bandpass',2300,0.8,0.16,0.3,0.05,true); } },
+    groan(level=1){ const v=crowd('groan',0.75*level); noise(1.3,'lowpass',520,0.8,v?0.14:0.32,0.18,0,true); },
     thud(){ tone(95,48,0.14,0.7); noise(0.07,'lowpass',800,0.7,0.4); },
   };
 })();
@@ -1519,14 +1533,14 @@ function setupShot(){
   if(!G.demo){ hudAll(); hudCombo(); }
   $('hint').hidden=G.demo||G.shots>0;
 }
-function nextShot(){ G.phase='trans'; G.transT=0; G._swapped=false; }
+function nextShot(){ G.phase='trans'; G.transT=0; G._swapped=false; Snd.quiet(0.45); }
 
 function doKick(k){
   kickWorld(world,k);
   G.phase='flight';
   if(!G.demo){
     G.shots++; $('hint').hidden=true;
-    Snd.kick(clamp(k.V/33,0,1));
+    Snd.quiet(0.08); Snd.kick(clamp(k.V/33,0,1));
     try{ navigator.vibrate&&navigator.vibrate(18); }catch(e){}
     hud.speedV.textContent=Math.round(k.V*3.6); hud.speed.hidden=false; speedTimer=2.2;
   }

@@ -1,5 +1,5 @@
 // Offline play: the page comes from the network when there is one (so updates arrive), the cache otherwise.
-const V='kamiashi-v4', FONTS='kamiashi-fonts';
+const V='kamiashi-v5', FONTS='kamiashi-fonts';
 const CORE=['./','index.html','manifest.webmanifest','icons/apple-touch-icon.png','icons/icon-192.png','icons/icon-512.png','icons/favicon-32.png'];
 self.addEventListener('install',e=>{ e.waitUntil(caches.open(V).then(c=>c.addAll(CORE)).then(()=>self.skipWaiting())); });
 self.addEventListener('activate',e=>{ e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==V&&k!==FONTS).map(k=>caches.delete(k)))).then(()=>self.clients.claim())); });
