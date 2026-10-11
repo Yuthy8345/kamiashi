@@ -19,28 +19,15 @@ html,body{margin:0;height:100%;background:#0b1721}
 [hidden]{display:none!important}
 /* full screen on the home screen: the game keeps its scoreboard and menus clear of the notch and the home bar */
 html:root{--safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px)}
-/* launched from the home screen, the page is pinned to the full screen height (set below) */
-html.standalone{overflow:hidden}
-html.standalone body{position:fixed;left:0;top:0;width:100%;height:var(--app-h,100%);overflow:hidden}
+/* Launched from the home screen, iOS 26 reports a page height (100%, 100dvh, innerHeight) that is short by the
+   status bar, which left an empty strip at the bottom. The large viewport unit still spans the whole screen, so
+   the page is sized with it. It stays in the normal flow: a fixed layer is cut off at the short height. */
+@supports (height:100lvh){
+  @media (display-mode: standalone){ html:root,html:root body{height:100lvh} }
+  html:root[data-standalone],html:root[data-standalone] body{height:100lvh}
+}
 </style>
-<script>
-// iOS home-screen apps with a see-through status bar can report a page height that is short by the
-// status bar, which leaves an empty strip at the bottom. Size the page to the screen instead.
-(function(){
-  var sa=window.navigator.standalone===true||(window.matchMedia&&matchMedia('(display-mode: standalone)').matches);
-  if(!sa) return;
-  var root=document.documentElement; root.classList.add('standalone');
-  function fit(){
-    var portrait=innerHeight>=innerWidth;
-    var full=portrait?Math.max(screen.width,screen.height):Math.min(screen.width,screen.height);
-    var h=innerHeight;
-    if(full>h&&full-h<=100) h=full;          // only the status-bar shortfall, never a split-screen window
-    root.style.setProperty('--app-h',h+'px');
-  }
-  fit(); addEventListener('resize',fit); addEventListener('orientationchange',function(){setTimeout(fit,250);});
-  addEventListener('pageshow',fit);
-})();
-</script>
+<script>if(window.navigator.standalone===true) document.documentElement.setAttribute('data-standalone','');</script>
 </head>
 <body>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -711,8 +698,8 @@ const $=id=>document.getElementById(id);
 const app=$('app'), cv=$('c'), ctx=cv.getContext('2d');
 const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let W=360,H=640,DPR=1,HF=640;
-// Flicks are measured against the height below the status bar, so filling the screen under a
-// see-through status bar (home-screen app) doesn't change how strong a flick feels.
+// Flicks are measured against the height below the status bar (and never more than the height the page
+// reports), so filling the screen under a see-through status bar doesn't change how strong a flick feels.
 let safeProbe=null;
 function safeTopPx(){
   try{
@@ -1086,7 +1073,7 @@ function resize(){
   cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR);
   ctx.setTransform(DPR,0,0,DPR,0,0);
   cam.f=1.64*Math.min(W,H*0.47); cam.hy=H*0.27;
-  HF=Math.max(200,H-safeTopPx());
+  HF=Math.max(200,Math.min(H-safeTopPx(),innerHeight||H));
 }
 new ResizeObserver(resize).observe(app);
 resize();
