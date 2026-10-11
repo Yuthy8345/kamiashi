@@ -19,7 +19,28 @@ html,body{margin:0;height:100%;background:#0b1721}
 [hidden]{display:none!important}
 /* full screen on the home screen: the game keeps its scoreboard and menus clear of the notch and the home bar */
 html:root{--safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px)}
+/* launched from the home screen, the page is pinned to the full screen height (set below) */
+html.standalone{overflow:hidden}
+html.standalone body{position:fixed;left:0;top:0;width:100%;height:var(--app-h,100%);overflow:hidden}
 </style>
+<script>
+// iOS home-screen apps with a see-through status bar can report a page height that is short by the
+// status bar, which leaves an empty strip at the bottom. Size the page to the screen instead.
+(function(){
+  var sa=window.navigator.standalone===true||(window.matchMedia&&matchMedia('(display-mode: standalone)').matches);
+  if(!sa) return;
+  var root=document.documentElement; root.classList.add('standalone');
+  function fit(){
+    var portrait=innerHeight>=innerWidth;
+    var full=portrait?Math.max(screen.width,screen.height):Math.min(screen.width,screen.height);
+    var h=innerHeight;
+    if(full>h&&full-h<=100) h=full;          // only the status-bar shortfall, never a split-screen window
+    root.style.setProperty('--app-h',h+'px');
+  }
+  fit(); addEventListener('resize',fit); addEventListener('orientationchange',function(){setTimeout(fit,250);});
+  addEventListener('pageshow',fit);
+})();
+</script>
 </head>
 <body>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -689,7 +710,16 @@ function tick(w,dt){
 const $=id=>document.getElementById(id);
 const app=$('app'), cv=$('c'), ctx=cv.getContext('2d');
 const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
-let W=360,H=640,DPR=1;
+let W=360,H=640,DPR=1,HF=640;
+// Flicks are measured against the height below the status bar, so filling the screen under a
+// see-through status bar (home-screen app) doesn't change how strong a flick feels.
+let safeProbe=null;
+function safeTopPx(){
+  try{
+    if(!safeProbe){ safeProbe=document.createElement('div'); safeProbe.style.cssText='position:fixed;left:0;top:0;width:0;height:env(safe-area-inset-top,0px);visibility:hidden;pointer-events:none'; document.body.appendChild(safeProbe); }
+    return safeProbe.getBoundingClientRect().height||0;
+  }catch(e){ return 0; }
+}
 const cam={x:0,y:2.55,z:0,ux:0,uz:1,rx:1,rz:0,f:600,hy:170,adv:0,shake:0,shakeX:0,shakeY:0};
 
 const store={
@@ -1056,6 +1086,7 @@ function resize(){
   cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR);
   ctx.setTransform(DPR,0,0,DPR,0,0);
   cam.f=1.64*Math.min(W,H*0.47); cam.hy=H*0.27;
+  HF=Math.max(200,H-safeTopPx());
 }
 new ResizeObserver(resize).observe(app);
 resize();
@@ -1405,7 +1436,7 @@ function drawSwipe(){
     ctx.lineCap='round'; ctx.lineJoin='round';
     for(let i=1;i<pts.length;i++){
       const k=i/pts.length, a=pts[i-1], b=pts[i], dt=Math.max(8,b.t-a.t);
-      const sp=clamp(((Math.hypot(b.x-a.x,b.y-a.y)/H)/(dt/1000)-1.2)/3,0,1);  // power: white -> red
+      const sp=clamp(((Math.hypot(b.x-a.x,b.y-a.y)/HF)/(dt/1000)-1.2)/3,0,1);  // power: white -> red
       ctx.strokeStyle=`rgba(${Math.round(lerp(242,229,sp))},${Math.round(lerp(245,50,sp))},${Math.round(lerp(236,63,sp))},${alpha*(0.25+0.75*k)})`;
       ctx.lineWidth=3+7*k;
       ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
@@ -1640,7 +1671,7 @@ cv.addEventListener('pointerdown',e=>{
   Snd.init();
   if(G.demo||G.paused||G.phase!=='aim'||swipe.id!==null) return;
   const p=local(e), b=world.ball, q=proj(b.x,b.y,b.z);
-  if(!q || p.y<q.y-H*0.26) return;
+  if(!q || p.y<q.y-HF*0.26) return;
   swipe.id=e.pointerId; swipe.pts=[p]; swipe.done=false;
   setKeeper(world);                                   // the keeper sets as the taker steps up
   try{ cv.setPointerCapture(e.pointerId); }catch(err){}
@@ -1652,7 +1683,7 @@ cv.addEventListener('pointermove',e=>{
   for(const ce of (list.length?list:[e])) swipe.pts.push(local(ce));
   if(swipe.pts.length>160) swipe.pts.splice(1,1);
   // a long flick kicks as soon as it has travelled far enough; no need to wait for the finger to lift
-  if(swipe.pts[0].y-swipe.pts[swipe.pts.length-1].y>H*0.58){ swipe.done=true; const pts=swipe.pts.slice(); swipe.fade.push({pts,t:performance.now()}); processSwipe(pts); }
+  if(swipe.pts[0].y-swipe.pts[swipe.pts.length-1].y>HF*0.58){ swipe.done=true; const pts=swipe.pts.slice(); swipe.fade.push({pts,t:performance.now()}); processSwipe(pts); }
 });
 const endSwipe=e=>{
   if(e.pointerId!==swipe.id) return;
@@ -1673,14 +1704,14 @@ function processSwipe(P){
   const end=P[P.length-1]; let i1=P.length-1;
   while(i1>i0+1 && Math.hypot(P[i1-1].x-end.x,P[i1-1].y-end.y)<4) i1--;
   const a=P[i0], b=P[i1], cx=b.x-a.x, cy=b.y-a.y, len=Math.hypot(cx,cy);
-  if(len<H*0.05 || cy>-H*0.025){ shout('','ボールから上へフリック',null,false); return; }
+  if(len<HF*0.05 || cy>-HF*0.025){ shout('','ボールから上へフリック',null,false); return; }
   // flick speed: the faster of the whole-swipe average and the peak over ~50 ms
-  const avg=(len/H)/Math.max(0.04,(b.t-a.t)/1000);
+  const avg=(len/HF)/Math.max(0.04,(b.t-a.t)/1000);
   let peak=0;
   for(let j=i0+1;j<=i1;j++){
     let i=j-1; while(i>i0 && P[j].t-P[i].t<50) i--;
     const dt=(P[j].t-P[i].t)/1000; if(dt<0.016) continue;
-    peak=Math.max(peak,(Math.hypot(P[j].x-P[i].x,P[j].y-P[i].y)/H)/dt);
+    peak=Math.max(peak,(Math.hypot(P[j].x-P[i].x,P[j].y-P[i].y)/HF)/dt);
   }
   const S=Math.max(avg,0.8*peak);
   doKick(solveKick(world.shot,aimFromScreen(cx*0.72,cy),S,readCurl(P,i0,i1)));
